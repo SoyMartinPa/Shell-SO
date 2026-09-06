@@ -38,7 +38,7 @@ char **parseLine(const char *line, char delimiter, int *count) {
     token = strtok_r(copy, delimiters, &saveptr);
 
     while (token != NULL) {
-        if (*count == capacity) {
+        if (*count >= capacity - 1) { //El "-1" para tener los espacios para count MÁS el último token 
             capacity *= 2;
             tokens = realloc(tokens, sizeof(char *) * capacity);
 
@@ -63,7 +63,7 @@ char **parseLine(const char *line, char delimiter, int *count) {
 
         token = strtok_r(NULL, delimiters, &saveptr);
     }
-
+    tokens[*count] = NULL;
     free(copy);
     return tokens;
 }
@@ -115,7 +115,7 @@ void executePipelineCommand(char ***commands, int commandCount) {
         return;
     }
 
-    pids = malloc(sizeof(pid_t) * commandCount);
+    pids = calloc(commandCount, sizeof(pid_t));
 
     if (pids == NULL) {
         perror("Error de memoria");
@@ -126,12 +126,24 @@ void executePipelineCommand(char ***commands, int commandCount) {
         pid_t pid;
 
         if (commands[i] == NULL || commands[i][0] == NULL) {
+            
+            if (previousInput != STDIN_FILENO){ // Esto se ocupa para limpiar la pipeline vacia y poder reutilizar los descriptores 
+                close(previousInput);
+                previousInput = STDIN_FILENO;
+            }
+            pids[i] = 0;
             continue;
         }
 
         if (i < commandCount - 1) {
             if (pipe(pipefd) == -1) {
                 perror("Error al crear pipe");
+
+                for (int j = 0; j<i ; j++){ // Con esto esperamos a los procesos lanzados y así evitamos procesos zombies.
+                    if (pids[j] > 0){
+                        waitpid(pids[j], NULL, 0);
+                    }
+                }
                 free(pids);
                 return;
             }
@@ -185,4 +197,5 @@ void executePipelineCommand(char ***commands, int commandCount) {
     }
 
     free(pids);
+
 }

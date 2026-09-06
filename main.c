@@ -2,24 +2,33 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "funciones.h"
 
 int main(void) {
+    char cwd[2048];
     char *line = NULL;
     size_t lineCapacity = 0;
     ssize_t lineLength;
 
     while (1) {
+
         char **pipeLines;
         char ***commands;
         int pipeCount;
         int i;
 
-        printf("mishell$ ");
+
+        if (getcwd(cwd,sizeof(cwd)) == NULL){ //Verifica el cwd y da error si no se pudo obtener
+            perror("getcwd");
+            return 1;
+        }
+
+        printf("miShell:%s$>  ", cwd);
         fflush(stdout);
 
-        lineLength = getline(&line, &lineCapacity, stdin);
+        lineLength = getline(&line, &lineCapacity, stdin); //Lee una linea de stdin y devuelve la cantidad de caracteres leidos
 
         if (lineLength == -1) {
             break;
