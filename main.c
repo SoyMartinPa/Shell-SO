@@ -65,7 +65,11 @@ int main(void) {
         }
 
         if (pipeCount == 1) {
-            executeNormalCommand(commands[0]);
+            if (commands[0] != NULL && commands[0][0] != NULL && strcmp(commands[0][0], "cd") == 0) {
+                builtin_cd(commands[0]);
+            } else {
+                executeNormalCommand(commands[0]);
+            }
         } else {
             executePipelineCommand(commands, pipeCount);
         }

@@ -6,5 +6,6 @@ void freeTokens(char **tokens, int count);
 
 void executeNormalCommand(char **args);
 void executePipelineCommand(char ***commands, int commandCount);
+void builtin_cd(char **args);
 
 #endif

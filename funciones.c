@@ -199,3 +199,28 @@ void executePipelineCommand(char ***commands, int commandCount) {
     free(pids);
 
 }
+
+void builtin_cd(char **args) {
+    char *target_dir;
+
+    if (args[1] == NULL) {
+        target_dir = getenv("HOME");
+        if (target_dir == NULL) {
+            fprintf(stderr, "cd: HOME no definido\n");
+            return;
+        }
+    } 
+    
+    else if (args[2] != NULL) {
+        fprintf(stderr, "cd: demasiados argumentos\n");
+        return;
+    } 
+    
+    else {
+        target_dir = args[1];
+    }
+
+    if (chdir(target_dir) != 0) {
+        perror("cd");
+    }
+}
