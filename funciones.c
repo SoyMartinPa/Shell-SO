@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-
+#include <ctype.h>
 #include "funciones.h"
 
 char **parseLine(const char *line, char delimiter, int *count) {
@@ -206,13 +206,13 @@ void builtin_cd(char **args) {
     if (args[1] == NULL) {
         target_dir = getenv("HOME");
         if (target_dir == NULL) {
-            fprintf(stderr, "cd: HOME no definido\n");
+            fprintf(stderr,"cd: HOME no definido\n");
             return;
         }
     } 
     
     else if (args[2] != NULL) {
-        fprintf(stderr, "cd: demasiados argumentos\n");
+        fprintf(stderr,"cd: demasiados argumentos\n");
         return;
     } 
     
@@ -223,4 +223,38 @@ void builtin_cd(char **args) {
     if (chdir(target_dir) != 0) {
         perror("cd");
     }
+}
+
+int builtin_exit(char **args) {
+    int exit_code = 0;
+
+    if (args[1] != NULL) {
+        int j = (args[1][0] == '-' || args[1][0] == '+') ? 1 : 0;
+        int is_numeric = 1;
+
+        if (args[1][j] == '\0') {
+            is_numeric = 0;
+        }
+
+        for (; args[1][j] != '\0'; j++) {
+            if (!isdigit(args[1][j])) {
+                is_numeric = 0;
+                break;
+            }
+        }
+
+        if (!is_numeric) {
+            fprintf(stderr,"exit: %s: requiere un argumento numérico\n",args[1]);
+            exit(2);
+        }
+
+        if (args[2] != NULL) {
+            fprintf(stderr,"exit: demasiados argumentos\n");
+            return 0;
+        }
+
+        exit_code = atoi(args[1]);
+    }
+
+    exit(exit_code);
 }
