@@ -8,5 +8,6 @@ void executeNormalCommand(char **args);
 void executePipelineCommand(char ***commands, int commandCount);
 void builtin_cd(char **args);
 int builtin_exit(char **args);
-
+int agregarProceso(pid_t pid, const char *cmd);
+void builtin_jobs(void);
 #endif

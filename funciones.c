@@ -7,6 +7,72 @@
 #include <ctype.h>
 #include "funciones.h"
 
+
+#define MAXPROCESS 100 //100 son los procesos background máximos (100 número arbitrario, puede ser o más o menos)
+typedef struct { //Este struct permite tener una lista de comandos background (Sive para el comando interno 'jobs')
+    pid_t pid;         
+    char comando[256]; 
+    int activo; //1 si activo, 0 sino. Util para marcar el orden de los
+} ProcesoHijo;
+ProcesoHijo listaHijos[MAXPROCESS];
+int totalHijosActivos = 0; // Cuenta total de los hijos activos (Permite reutilizar la tabla de procesos background)
+
+int agregarProceso(pid_t pid, const char *cmd) {
+    int indiceLibre = -1;
+    pid_t finished_pid;
+    int status;
+
+    //Verifica que un proceso hijo terminó para liberar el espacio de la lista
+    while ((finished_pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        for (int i = 0; i < MAXPROCESS; i++) {
+            if (listaHijos[i].pid == finished_pid) {
+                listaHijos[i].activo = 0; // Lo marcamos como inactivo
+            }
+        }
+    }
+    //Busca algun espacio en la tabla que no se esté usando para agregar un nuevo proceso ahí.
+    for (int i = 0; i < MAXPROCESS; i++) {
+        if (listaHijos[i].activo == 0) { 
+            indiceLibre = i; 
+            break;
+        }
+    }
+    //Esto significa que la tabla se llenó.
+    if (indiceLibre == -1) {
+        fprintf(stderr, "Error: Tabla de procesos llena.\n");
+        return -1;
+    }
+
+    //Si se encontró un espacio, se asignan los valores.
+    listaHijos[indiceLibre].pid = pid;
+    strncpy(listaHijos[indiceLibre].comando, cmd, sizeof(listaHijos[indiceLibre].comando) - 1);
+    listaHijos[indiceLibre].activo = 1;
+
+    printf("[%d] PID: %d | Comando: %s\n", indiceLibre + 1 ,listaHijos[indiceLibre].pid, listaHijos[indiceLibre].comando);
+
+    return indiceLibre;
+}
+void builtin_jobs(void) {
+    pid_t finished_pid;
+    int status;
+
+    //Verifica que un proceso hijo terminó para liberar el espacio de la lista
+    while ((finished_pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        for (int i = 0; i < MAXPROCESS; i++) {
+            if (listaHijos[i].pid == finished_pid) {
+                listaHijos[i].activo = 0; // Lo marcamos como inactivo
+            } 
+        }
+    }
+
+    //Simplemente recorre y muestra la información
+    for (int i = 0; i < MAXPROCESS; i++) {
+        if (listaHijos[i].activo == 1) {
+            printf("[%d] PID: %d | Comando: %s\n", i+1, listaHijos[i].pid, listaHijos[i].comando);
+        }
+    }
+}
+
 char **parseLine(const char *line, char delimiter, int *count) {
     char *copy;
     char *token;
@@ -83,14 +149,22 @@ void freeTokens(char **tokens, int count) {
 }
 
 void executeNormalCommand(char **args) {
+    int argumentCount = 0, background = 0;
     pid_t pid;
 
     if (args == NULL || args[0] == NULL) {
         return;
     }
 
-    pid = fork();
+    while (args[argumentCount] != NULL) {argumentCount++;} //Cuenta la cantidad de argumentos ingresados
 
+    if (argumentCount > 0 && strcmp(args[argumentCount-1], "&") == 0) //Si el elemento final es '&' dejar el proceso en background
+    {
+        background = 1; //flag para dejar en background
+        args[argumentCount-1] = NULL; //Eliminamos el '&' en los argumentos (pues da error en el excvp) y lo dejamos como NULL
+    }
+
+    pid = fork();
     if (pid == -1) {
         perror("Error en fork");
         return;
@@ -101,11 +175,13 @@ void executeNormalCommand(char **args) {
         perror("Error al ejecutar el comando");
         exit(EXIT_FAILURE);
     }
-
-    waitpid(pid, NULL, 0);
+    if(background){ //Si el proceso es background, agregar a tabla de background, sino, esperar por él.
+        agregarProceso(pid,args[0]);
+    } else{waitpid(pid, NULL, 0);}
 }
 
 void executePipelineCommand(char ***commands, int commandCount) {
+    int argumentCount = 0, background = 0;
     int previousInput = STDIN_FILENO;
     int pipefd[2];
     int i;
@@ -120,6 +196,14 @@ void executePipelineCommand(char ***commands, int commandCount) {
     if (pids == NULL) {
         perror("Error de memoria");
         return;
+    }
+
+    while (commands[commandCount-1][argumentCount-1] != NULL) {argumentCount++;} //Cuenta la cantidad de argumentos ingresados en el ultimo pipe
+
+    if (argumentCount > 0 && strcmp(commands[commandCount-1][argumentCount-1], "&") == 0) //Si el elemento final es '&' dejar el proceso en background
+    {
+        background = 1; //flag para dejar en background
+        commands[commandCount -1][argumentCount-1] = NULL; //Eliminamos el '&' en los argumentos (pues da error en el excvp) y lo dejamos como NULL
     }
 
     for (i = 0; i < commandCount; i++) {
@@ -189,13 +273,19 @@ void executePipelineCommand(char ***commands, int commandCount) {
     if (previousInput != STDIN_FILENO) {
         close(previousInput);
     }
-
-    for (i = 0; i < commandCount; i++) {
-        if (pids[i] > 0) {
-            waitpid(pids[i], NULL, 0);
-        }
+    if(!background){
+        for (i = 0; i < commandCount; i++) {
+            if (pids[i] > 0) {
+                waitpid(pids[i], NULL, 0);
+                }
+            }
+    } else {
+        for (i = 0; i < commandCount; i++) {
+            if (pids[i] > 0) {
+                agregarProceso(pids[i], commands[i][0]);
+                }
+            }
     }
-
     free(pids);
 
 }

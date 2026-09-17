@@ -59,7 +59,7 @@ int main(void) {
 
             commands[i] = parseLine(pipeLines[i], ' ', &argumentCount);
         }
-
+        
         if (pipeCount == 1) {
             if (commands[0] != NULL && commands[0][0] != NULL) {
                 if (strcmp(commands[0][0], "cd") == 0) { // Se ejecuta el comando cd directamente en el proceso principal
@@ -79,6 +79,9 @@ int main(void) {
                         continue;
                     }
                 } 
+                else if(strcmp(commands[0][0], "jobs") == 0){
+                    builtin_jobs();
+                }
                 else {
                     executeNormalCommand(commands[0]);
                 }
