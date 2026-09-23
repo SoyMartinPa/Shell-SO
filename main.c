@@ -18,7 +18,12 @@ int main(void) {
         char ***commands;
         int pipeCount;
         int i;
-
+        
+        struct sigaction sa;
+        sa.sa_handler = manejador_sigint;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        sigaction(SIGINT, &sa, NULL);
 
         if (getcwd(cwd,sizeof(cwd)) == NULL){ //Verifica el cwd y da error si no se pudo obtener
             perror("getcwd");

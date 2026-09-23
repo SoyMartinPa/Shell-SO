@@ -5,7 +5,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <ctype.h>
-#include "funciones.h"
+
 
 
 #define MAXPROCESS 100 //100 son los procesos background máximos (100 número arbitrario, puede ser o más o menos)
@@ -171,6 +171,12 @@ void executeNormalCommand(char **args) {
     }
 
     if (pid == 0) {
+        struct sigaction sa_dfl;
+        sa_dfl.sa_handler = SIG_DFL;
+        sigemptyset(&sa_dfl.sa_mask);
+        sa_dfl.sa_flags = 0;
+        sigaction(SIGINT, &sa_dfl, NULL);
+
         execvp(args[0], args);
         perror("Error al ejecutar el comando");
         exit(EXIT_FAILURE);
@@ -251,7 +257,12 @@ void executePipelineCommand(char ***commands, int commandCount) {
                 dup2(pipefd[1], STDOUT_FILENO);
                 close(pipefd[0]);
                 close(pipefd[1]);
-            }
+            }            
+            struct sigaction sa_dfl;
+            sa_dfl.sa_handler = SIG_DFL;
+            sigemptyset(&sa_dfl.sa_mask);
+            sa_dfl.sa_flags = 0;
+            sigaction(SIGINT, &sa_dfl, NULL);          
 
             execvp(commands[i][0], commands[i]);
             perror("Error al ejecutar comando en pipe");
