@@ -5,6 +5,13 @@
 #include <unistd.h>
 #include <signal.h>
 #include "funciones.h"
+volatile sig_atomic_t debe_terminar = 0;
+//Se ocupa por portabilidad, y por
+void manejador_sigint(int signum) {
+    (void) signum;
+    debe_terminar = 1; 
+}
+
 
 int main(void) {
     char cwd[2048];
@@ -19,11 +26,11 @@ int main(void) {
         int pipeCount;
         int i;
         
-        //struct sigaction sa;
-        //sa.sa_handler = manejador_sigint;
-        //sigemptyset(&sa.sa_mask);
-        //sa.sa_flags = SA_RESTART;
-        //sigaction(SIGINT, &sa, NULL);
+        struct sigaction sa;
+        sa.sa_handler = manejador_sigint;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        sigaction(SIGINT, &sa, NULL);
 
         if (getcwd(cwd,sizeof(cwd)) == NULL){ //Verifica el cwd y da error si no se pudo obtener
             perror("getcwd");
