@@ -15,6 +15,7 @@
 typedef struct { //Este struct permite tener una lista de comandos background (Sive para el comando interno 'jobs')
     pid_t pid;         
     char comando[256]; 
+    char estado[32];
     bool activo; 
 } ProcesoHijo;
 ProcesoHijo listaHijos[MAXPROCESS];
@@ -49,9 +50,11 @@ int agregarProceso(pid_t pid, const char *cmd) {
     //Si se encontró un espacio, se asignan los valores.
     listaHijos[indiceLibre].pid = pid;
     strncpy(listaHijos[indiceLibre].comando, cmd, sizeof(listaHijos[indiceLibre].comando) - 1);
+    listaHijos[indiceLibre].comando[sizeof(listaHijos[indiceLibre].comando) - 1] = '\0';
+    strncpy(listaHijos[indiceLibre].estado, "Ejecutando", sizeof(listaHijos[indiceLibre].estado) - 1);
     listaHijos[indiceLibre].activo = true;
 
-    printf("[%d] PID: %d | Comando: %s\n", indiceLibre + 1 ,listaHijos[indiceLibre].pid, listaHijos[indiceLibre].comando);
+    printf("[%d] %d\n", indiceLibre + 1, listaHijos[indiceLibre].pid);
 
     return indiceLibre;
 }
@@ -71,7 +74,7 @@ void builtin_jobs(void) {
     //Simplemente recorre y muestra la información
     for (int i = 0; i < MAXPROCESS; i++) {
         if (listaHijos[i].activo == true) {
-            printf("[%d] PID: %d | Comando: %s\n", i+1, listaHijos[i].pid, listaHijos[i].comando);
+            printf("[%d] %-12s %s\n", i + 1, listaHijos[i].estado, listaHijos[i].comando);
         }
     }
 }
@@ -188,8 +191,16 @@ void executeNormalCommand(char **args) {
         exit(EXIT_FAILURE);
     }
     if(background){ //Si el proceso es background, agregar a tabla de background, sino, esperar por él.
-        agregarProceso(pid,args[0]);
-    } else{waitpid(pid, NULL, 0);}
+        char full_cmd[256] = "";
+        for (int k = 0; args[k] != NULL; k++) {
+            strncat(full_cmd, args[k], sizeof(full_cmd) - strlen(full_cmd) - 1);
+            if (args[k + 1] != NULL) {
+                strncat(full_cmd, " ", sizeof(full_cmd) - strlen(full_cmd) - 1);
+            }
+        }
+        agregarProceso(pid, full_cmd);
+    } 
+    else{waitpid(pid, NULL, 0);}
 }
 
 void executePipelineCommand(char ***commands, int commandCount) {
@@ -302,9 +313,16 @@ void executePipelineCommand(char ***commands, int commandCount) {
     } else {
         for (i = 0; i < commandCount; i++) {
             if (pids[i] > 0) {
-                agregarProceso(pids[i], commands[i][0]);
+                char full_cmd[256] = "";
+                for (int k = 0; commands[i][k] != NULL; k++) {
+                    strncat(full_cmd, commands[i][k], sizeof(full_cmd) - strlen(full_cmd) - 1);
+                    if (commands[i][k + 1] != NULL) {
+                        strncat(full_cmd, " ", sizeof(full_cmd) - strlen(full_cmd) - 1);
+                    }
                 }
+                agregarProceso(pids[i], full_cmd);
             }
+        }
     }
     free(pids);
 
