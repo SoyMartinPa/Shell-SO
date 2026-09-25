@@ -461,7 +461,7 @@ int builtin_exit(char **args) {
 
     exit(exit_code);
 }
-
+// Variables para avisar cuando suena la alarma o cuando se presiona ctrl+c
 static volatile sig_atomic_t pmon_tick = 0;
 static volatile sig_atomic_t pmon_exit = 0;
 
@@ -470,11 +470,13 @@ static void manejador_pmon_alrm(int sig) {
     pmon_tick = 1;
 }
 
+// Se ejecuta si el usuario presiona ctrl+c dentro del pmon
 static void manejador_pmon_sigint(int sig) {
     (void)sig;
     pmon_exit = 1;
 }
 
+// Estructura para recordar los datos anteriores de cada proceso y calcular el %cpu
 typedef struct {
     pid_t pid;
     unsigned long long prev_total_time;
@@ -495,6 +497,7 @@ static const char *describir_estado(char state_char) {
     }
 }
 
+// Lee los archivos de texto que linux crea para cada proceso en /proc
 static bool obtener_datos_proc(pid_t pid, char *estado_str, unsigned long long *cpu_time, long *rss_kb) {
     char ruta[64];
     FILE *fp;
@@ -543,6 +546,7 @@ static bool obtener_datos_proc(pid_t pid, char *estado_str, unsigned long long *
     return true;
 }
 
+// Función pmon monitor de procesos
 void builtin_pmon(char **args) {
     int intervalo = 2;
     if (args[1] != NULL) {
@@ -554,18 +558,21 @@ void builtin_pmon(char **args) {
 
     struct sigaction sa_alrm, sa_int, old_alrm, old_int;
 
+    // Se prepara el receptor para la alarma periódica
     memset(&sa_alrm, 0, sizeof(sa_alrm));
     sa_alrm.sa_handler = manejador_pmon_alrm;
     sigemptyset(&sa_alrm.sa_mask);
     sa_alrm.sa_flags = 0;
     sigaction(SIGALRM, &sa_alrm, &old_alrm);
 
+    // Se prepara el receptor para capturar ctrl+c sin cerrar la shell
     memset(&sa_int, 0, sizeof(sa_int));
     sa_int.sa_handler = manejador_pmon_sigint;
     sigemptyset(&sa_int.sa_mask);
     sa_int.sa_flags = 0;
     sigaction(SIGINT, &sa_int, &old_int);
 
+    // Se limpian datos viejos del cpu
     memset(trackers, 0, sizeof(trackers));
     long clk_tck = sysconf(_SC_CLK_TCK);
     if (clk_tck <= 0) clk_tck = 100;
