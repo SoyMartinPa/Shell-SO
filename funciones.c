@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <ctype.h>
+#include <sys/time.h>
 #include "funciones.h"
 
 #define MAXPROCESS 100 //100 son los procesos background máximos (100 número arbitrario, puede ser o más o menos)
@@ -459,4 +460,182 @@ int builtin_exit(char **args) {
     }
 
     exit(exit_code);
+}
+
+static volatile sig_atomic_t pmon_tick = 0;
+static volatile sig_atomic_t pmon_exit = 0;
+
+static void manejador_pmon_alrm(int sig) {
+    (void)sig;
+    pmon_tick = 1;
+}
+
+static void manejador_pmon_sigint(int sig) {
+    (void)sig;
+    pmon_exit = 1;
+}
+
+typedef struct {
+    pid_t pid;
+    unsigned long long prev_total_time;
+    struct timeval prev_timestamp;
+    bool tracked;
+} CpuTracker;
+
+static CpuTracker trackers[MAXPROCESS];
+
+static const char *describir_estado(char state_char) {
+    switch (state_char) {
+        case 'R': return "ejecutando";
+        case 'S': return "durmiendo";
+        case 'D': return "durmiendo";
+        case 'Z': return "zombie";
+        case 'T': return "detenido";
+        default:  return "desconocido";
+    }
+}
+
+static bool obtener_datos_proc(pid_t pid, char *estado_str, unsigned long long *cpu_time, long *rss_kb) {
+    char ruta[64];
+    FILE *fp;
+
+    snprintf(ruta, sizeof(ruta), "/proc/%d/stat", pid);
+    fp = fopen(ruta, "r");
+    if (!fp) {
+        return false;
+    }
+
+    char stat_buffer[1024];
+    if (fgets(stat_buffer, sizeof(stat_buffer), fp) == NULL) {
+        fclose(fp);
+        return false;
+    }
+    fclose(fp);
+
+    char *cierre_parentesis = strrchr(stat_buffer, ')');
+    if (!cierre_parentesis) {
+        return false;
+    }
+
+    char state_char;
+    unsigned long utime = 0, stime = 0;
+    sscanf(cierre_parentesis + 2,
+           "%c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu",
+           &state_char, &utime, &stime);
+
+    strcpy(estado_str, describir_estado(state_char));
+    *cpu_time = (unsigned long long)(utime + stime);
+
+    *rss_kb = 0;
+    snprintf(ruta, sizeof(ruta), "/proc/%d/status", pid);
+    fp = fopen(ruta, "r");
+    if (fp) {
+        char linea[256];
+        while (fgets(linea, sizeof(linea), fp)) {
+            if (strncmp(linea, "VmRSS:", 6) == 0) {
+                sscanf(linea + 6, "%ld", rss_kb);
+                break;
+            }
+        }
+        fclose(fp);
+    }
+
+    return true;
+}
+
+void builtin_pmon(char **args) {
+    int intervalo = 2;
+    if (args[1] != NULL) {
+        int segs = atoi(args[1]);
+        if (segs > 0) {
+            intervalo = segs;
+        }
+    }
+
+    struct sigaction sa_alrm, sa_int, old_alrm, old_int;
+
+    memset(&sa_alrm, 0, sizeof(sa_alrm));
+    sa_alrm.sa_handler = manejador_pmon_alrm;
+    sigemptyset(&sa_alrm.sa_mask);
+    sa_alrm.sa_flags = 0;
+    sigaction(SIGALRM, &sa_alrm, &old_alrm);
+
+    memset(&sa_int, 0, sizeof(sa_int));
+    sa_int.sa_handler = manejador_pmon_sigint;
+    sigemptyset(&sa_int.sa_mask);
+    sa_int.sa_flags = 0;
+    sigaction(SIGINT, &sa_int, &old_int);
+
+    memset(trackers, 0, sizeof(trackers));
+    long clk_tck = sysconf(_SC_CLK_TCK);
+    if (clk_tck <= 0) clk_tck = 100;
+
+    pmon_exit = 0;
+    pmon_tick = 1;
+
+    while (!pmon_exit) {
+        if (pmon_tick) {
+            pmon_tick = 0;
+
+            printf("\033[H\033[J");
+            printf("%-8s | %-20s | %-12s | %-12s | %-8s\n", 
+                   "PID", "COMANDO", "ESTADO", "%CPU (aprox)", "RSS (KB)");
+
+            struct timeval now;
+            gettimeofday(&now, NULL);
+
+            for (int i = 0; i < MAXPROCESS; i++) {
+                if (!listaHijos[i].activo) {
+                    trackers[i].tracked = false;
+                    continue;
+                }
+
+                char estado_str[32] = {0};
+                unsigned long long cpu_time = 0;
+                long rss_kb = 0;
+
+                if (!obtener_datos_proc(listaHijos[i].pid, estado_str, &cpu_time, &rss_kb)) {
+                    listaHijos[i].activo = false;
+                    trackers[i].tracked = false;
+                    continue;
+                }
+
+                double cpu_percent = 0.0;
+                if (trackers[i].tracked && trackers[i].pid == listaHijos[i].pid) {
+                    double delta_time_sec = (now.tv_sec - trackers[i].prev_timestamp.tv_sec) +
+                                           (now.tv_usec - trackers[i].prev_timestamp.tv_usec) / 1000000.0;
+                    unsigned long long delta_cpu = (cpu_time >= trackers[i].prev_total_time) ? 
+                                                   (cpu_time - trackers[i].prev_total_time) : 0;
+
+                    if (delta_time_sec > 0.0) {
+                        cpu_percent = ((double)delta_cpu / clk_tck) / delta_time_sec * 100.0;
+                    }
+                }
+
+                trackers[i].pid = listaHijos[i].pid;
+                trackers[i].prev_total_time = cpu_time;
+                trackers[i].prev_timestamp = now;
+                trackers[i].tracked = true;
+
+                printf("%-8d | %-20.20s | %-12s | %-12.1f | %-8ld\n",
+                       listaHijos[i].pid,
+                       listaHijos[i].comando,
+                       estado_str,
+                       cpu_percent,
+                       rss_kb);
+            }
+            fflush(stdout);
+
+            alarm(intervalo);
+        }
+
+        pause();
+    }
+
+    alarm(0);
+
+    sigaction(SIGALRM, &old_alrm, NULL);
+    sigaction(SIGINT, &old_int, NULL);
+
+    printf("\n");
 }

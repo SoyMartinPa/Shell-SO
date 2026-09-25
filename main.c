@@ -94,6 +94,9 @@ int main(void) {
                 else if(strcmp(commands[0][0], "jobs") == 0){
                     builtin_jobs();
                 }
+                else if (strcmp(commands[0][0], "pmon") == 0) { // <-- AGREGAR ESTE BLOQUE
+                    builtin_pmon(commands[0]);
+                }
                 else {
                     executeNormalCommand(commands[0]);
                 }

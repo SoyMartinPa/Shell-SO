@@ -12,4 +12,5 @@ int agregarProceso(pid_t pid, const char *cmd);
 void builtin_jobs(void);
 void verificarRedireccion(char **args);
 void manejador_sigint(int sig);
+void builtin_pmon(char **args);
 #endif
