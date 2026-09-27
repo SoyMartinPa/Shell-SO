@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <ctype.h>
 #include <sys/time.h>
+#include <errno.h>
 #include "funciones.h"
 
 #define MAXPROCESS 100 //100 son los procesos background máximos (100 número arbitrario, puede ser o más o menos)
@@ -22,19 +23,35 @@ typedef struct { //Este struct permite tener una lista de comandos background (S
 ProcesoHijo listaHijos[MAXPROCESS];
 int totalHijosActivos = 0; // Cuenta total de los hijos activos (Permite reutilizar la tabla de procesos background)
 
+void manejador_sigchld(int sig){
+    (void)sig;
+    hijo_termino = 1;
+}
+
+void revisarHijosTerminados(bool mostrarMensaje){
+    pid_t finished_pid;
+    int status;
+
+    while ((finished_pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        for (int i = 0; i < MAXPROCESS; i++) {
+            if (listaHijos[i].pid == finished_pid && listaHijos[i].activo == true) {
+                if (mostrarMensaje){printf("\n[%d] + Terminó %s \n", i + 1,listaHijos[i].comando);}
+
+                listaHijos[i].activo = false;
+
+                break;
+            }
+        }
+    }
+
+    hijo_termino = 0;
+}
+
 int agregarProceso(pid_t pid, const char *cmd) {
     int indiceLibre = -1;
     pid_t finished_pid;
     int status;
 
-    //Verifica que un proceso hijo terminó para liberar el espacio de la lista
-    while ((finished_pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        for (int i = 0; i < MAXPROCESS; i++) {
-            if (listaHijos[i].pid == finished_pid) {
-                listaHijos[i].activo = false; // Lo marcamos como inactivo
-            }
-        }
-    }
     //Busca algun espacio en la tabla que no se esté usando para agregar un nuevo proceso ahí.
     for (int i = 0; i < MAXPROCESS; i++) {
         if (listaHijos[i].activo == false) { 
@@ -59,19 +76,9 @@ int agregarProceso(pid_t pid, const char *cmd) {
 
     return indiceLibre;
 }
+
 void builtin_jobs(void) {
-    pid_t finished_pid;
-    int status;
-
-    //Verifica que un proceso hijo terminó para liberar el espacio de la lista
-    while ((finished_pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        for (int i = 0; i < MAXPROCESS; i++) {
-            if (listaHijos[i].pid == finished_pid) {
-                listaHijos[i].activo = false; // Lo marcamos como inactivo
-            } 
-        }
-    }
-
+    revisarHijosTerminados(false);
     //Simplemente recorre y muestra la información
     for (int i = 0; i < MAXPROCESS; i++) {
         if (listaHijos[i].activo == true) {
@@ -140,7 +147,101 @@ char **parseLine(const char *line, char delimiter, int *count) {
     free(copy);
     return tokens;
 }
+char **parseArguments(const char *line, int *count) {
+    int capacity = 8;
+    char **tokens = malloc(sizeof(char *) * capacity);
 
+    if (tokens == NULL) {
+        perror("Error de memoria");
+        return NULL;
+    }
+
+    *count = 0;
+    int i = 0;
+    while (line[i] != '\0') {
+
+        // Primero eliminamos todos los espacios del argumento
+        while (line[i] == ' ' || line[i] == '\t') {i++;}
+
+        if (line[i] == '\0') {
+            break;
+        }
+
+        char buffer[1024];
+        int j = 0;
+        char quote = '\0';
+
+        while (line[i] != '\0') {
+
+            // Si estamos feura de las comillas y se detecta un espacio, terminar
+            if (quote == '\0' && (line[i] == ' ' || line[i] == '\t')) {
+                break;
+            }
+
+            // Si comienza o termina con comillas
+            if (line[i] == '"' || line[i] == '\'') {
+
+                if (quote == '\0') {
+                    quote = line[i];
+                    i++;
+                    continue;
+                }
+
+                if (quote == line[i]) {
+                    quote = '\0';
+                    i++;
+                    continue;
+                }
+            }
+
+            // Escape: conservar el siguiente carácter
+            if (line[i] == '\\' && line[i + 1] != '\0') {
+                buffer[j++] = line[i];
+                i++;
+                buffer[j++] = line[i];
+                i++;
+                continue;
+            }
+
+            buffer[j++] = line[i];
+            i++;
+        }
+
+        buffer[j] = '\0';
+
+        if (*count >= capacity - 1) {
+            capacity *= 2;
+
+            char **temp = realloc(tokens, sizeof(char *) * capacity);
+
+            if (temp == NULL) {
+                perror("Error de memoria");
+                freeTokens(tokens, *count);
+                return NULL;
+            }
+
+            tokens = temp;
+        }
+
+        tokens[*count] = malloc(strlen(buffer) + 1);
+
+        if (tokens[*count] == NULL) {
+            perror("Error de memoria");
+            freeTokens(tokens, *count);
+            return NULL;
+        }
+
+        strcpy(tokens[*count], buffer);
+        (*count)++;
+
+        // Eliminamos los espacios finales
+        while (line[i] == ' ' || line[i] == '\t') {i++;}
+    }
+
+    tokens[*count] = NULL;
+
+    return tokens;
+}
 void freeTokens(char **tokens, int count) {
     int i;
 
@@ -179,11 +280,13 @@ void executeNormalCommand(char **args) {
     }
 
     if (pid == 0) {
+        setpgid(0,0);
         struct sigaction sa_dfl;
         sa_dfl.sa_handler = SIG_DFL;
         sigemptyset(&sa_dfl.sa_mask);
         sa_dfl.sa_flags = 0;
         sigaction(SIGINT, &sa_dfl, NULL);
+        sigaction(SIGQUIT, &sa_dfl, NULL);
 
         verificarRedireccion(args); //Aplica la redirección de entrada/salida si es necesario
 
@@ -191,6 +294,7 @@ void executeNormalCommand(char **args) {
         perror("Error al ejecutar el comando");
         exit(EXIT_FAILURE);
     }
+    setpgid(pid, pid);
     if(background){ //Si el proceso es background, agregar a tabla de background, sino, esperar por él.
         char full_cmd[256] = "";
         for (int k = 0; args[k] != NULL; k++) {
@@ -201,7 +305,11 @@ void executeNormalCommand(char **args) {
         }
         agregarProceso(pid, full_cmd);
     } 
-    else{waitpid(pid, NULL, 0);}
+    else{
+        tcsetpgrp(STDIN_FILENO, pid);
+        while (waitpid(pid, NULL, 0) == -1 && errno == EINTR) {}
+        tcsetpgrp(STDIN_FILENO, shell_pgid);
+    }
 }
 
 void executePipelineCommand(char ***commands, int commandCount) {
@@ -223,7 +331,7 @@ void executePipelineCommand(char ***commands, int commandCount) {
         return;
     }
 
-    while (commands[commandCount-1][argumentCount-1] != NULL) {argumentCount++;} //Cuenta la cantidad de argumentos ingresados en el ultimo pipe
+    while (commands[commandCount-1][argumentCount] != NULL) {argumentCount++;} //Cuenta la cantidad de argumentos ingresados en el ultimo pipe
 
     if (argumentCount > 0 && strcmp(commands[commandCount-1][argumentCount-1], "&") == 0) //Si el elemento final es '&' dejar el proceso en background
     {
@@ -267,6 +375,12 @@ void executePipelineCommand(char ***commands, int commandCount) {
         }
 
         if (pid == 0) {
+            if (i == 0) {
+                setpgid(0, 0);
+            } else {
+                setpgid(0, pids[0]);
+            }
+
             if (previousInput != STDIN_FILENO) {
                 dup2(previousInput, STDIN_FILENO);
                 close(previousInput);
@@ -282,6 +396,7 @@ void executePipelineCommand(char ***commands, int commandCount) {
             sigemptyset(&sa_dfl.sa_mask);
             sa_dfl.sa_flags = 0;
             sigaction(SIGINT, &sa_dfl, NULL);
+            sigaction(SIGQUIT, &sa_dfl, NULL);
             
             verificarRedireccion(commands[i]); //Aplica la redirección de entrada/salida si es necesario
 
@@ -290,6 +405,11 @@ void executePipelineCommand(char ***commands, int commandCount) {
             exit(EXIT_FAILURE);
         }
 
+        if (i == 0) {
+            setpgid(pid, pid);
+        } else {
+            setpgid(pid, pids[0]);
+        }
         pids[i] = pid;
 
         if (previousInput != STDIN_FILENO) {
@@ -306,11 +426,14 @@ void executePipelineCommand(char ***commands, int commandCount) {
         close(previousInput);
     }
     if(!background){
+        tcsetpgrp(STDIN_FILENO, pids[0]);
         for (i = 0; i < commandCount; i++) {
             if (pids[i] > 0) {
-                waitpid(pids[i], NULL, 0);
+            while (waitpid(pids[i], NULL, 0) == -1 && errno == EINTR) {
                 }
             }
+        }
+        tcsetpgrp(STDIN_FILENO, shell_pgid);
     } else {
         for (i = 0; i < commandCount; i++) {
             if (pids[i] > 0) {
@@ -461,6 +584,8 @@ int builtin_exit(char **args) {
 
     exit(exit_code);
 }
+
+
 // Variables para avisar cuando suena la alarma o cuando se presiona ctrl+c
 static volatile sig_atomic_t pmon_tick = 0;
 static volatile sig_atomic_t pmon_exit = 0;
@@ -548,7 +673,7 @@ static bool obtener_datos_proc(pid_t pid, char *estado_str, unsigned long long *
 
 // Función pmon monitor de procesos
 void builtin_pmon(char **args) {
-    int intervalo = 2;
+    int intervalo = 2; //Por defecto, se esperará 2 segundos para avisar al alarm y repetir el ciclo.
     if (args[1] != NULL) {
         int segs = atoi(args[1]);
         if (segs > 0) {
@@ -583,6 +708,7 @@ void builtin_pmon(char **args) {
     while (!pmon_exit) {
         if (pmon_tick) {
             pmon_tick = 0;
+            revisarHijosTerminados(false);
 
             printf("\033[H\033[J");
             printf("%-8s | %-20s | %-12s | %-12s | %-8s\n", 
@@ -632,10 +758,9 @@ void builtin_pmon(char **args) {
                        rss_kb);
             }
             fflush(stdout);
-
             alarm(intervalo);
         }
-
+        
         pause();
     }
 

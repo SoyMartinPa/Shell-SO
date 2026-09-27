@@ -4,13 +4,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <termios.h>
 #include "funciones.h"
-volatile sig_atomic_t debe_terminar = 0;
-//Se ocupa por portabilidad, y por
-void manejador_sigint(int signum) {
-    (void) signum;
-    debe_terminar = 1; 
-}
+
+volatile sig_atomic_t hijo_termino = 0;
+pid_t shell_pgid; //Variable globalizada
+
 
 
 int main(void) {
@@ -19,18 +20,33 @@ int main(void) {
     size_t lineCapacity = 0;
     ssize_t lineLength;
 
+    //La idea de estas tres lineas de código son: obtener id de la shell, ponerla en un grupo, identificar el grupo como foregroung
+    //De esta manera poder diferenciar procesos foreground y background para el control + c
+    shell_pgid = getpid(); 
+    setpgid(shell_pgid, shell_pgid);
+    tcsetpgrp(STDIN_FILENO, shell_pgid);
+    
+    struct sigaction sa_ignore;
+    sa_ignore.sa_handler = SIG_IGN;
+    sigemptyset(&sa_ignore.sa_mask);
+    sa_ignore.sa_flags = SA_RESTART;
+    sigaction(SIGINT, &sa_ignore, NULL);
+    sigaction(SIGQUIT, &sa_ignore, NULL);
+    sigaction(SIGTTOU, &sa_ignore, NULL);
+
+    //Esta struc se complementa con los comandos background para imprimir que terminó un proceso background
+    struct sigaction sa_chld;
+    sa_chld.sa_handler = manejador_sigchld;
+    sigemptyset(&sa_chld.sa_mask);
+    sa_chld.sa_flags = 0;
+    sigaction(SIGCHLD, &sa_chld, NULL);
+
     while (1) {
 
         char **pipeLines;
         char ***commands;
         int pipeCount;
         int i;
-        
-        struct sigaction sa;
-        sa.sa_handler = manejador_sigint;
-        sigemptyset(&sa.sa_mask);
-        sa.sa_flags = SA_RESTART;
-        sigaction(SIGINT, &sa, NULL);
 
         if (getcwd(cwd,sizeof(cwd)) == NULL){ //Verifica el cwd y da error si no se pudo obtener
             perror("getcwd");
@@ -42,8 +58,25 @@ int main(void) {
 
         lineLength = getline(&line, &lineCapacity, stdin); //Lee una linea de stdin y devuelve la cantidad de caracteres leidos
 
-        if (lineLength == -1) {
-            break;
+
+        if (lineLength == -1) { 
+
+            if (errno == EINTR) { //Si terminó por una interrupción de sigchild, revisar hijos
+                if (hijo_termino) {
+                    revisarHijosTerminados(true);
+                    tcflush(STDIN_FILENO, TCIFLUSH); //tcflush permite limpiar la entrada una vez interrumpida, así evitar
+                }
+
+                clearerr(stdin); //Reinicia stdin a un estado sin error. (por defecto)
+                continue;
+            }
+
+            if (feof(stdin)) { //Esto pasa cuando se hace control + d
+                break;
+            }
+
+            perror("getline");
+            continue;
         }
 
         line[strcspn(line, "\n")] = '\0';
@@ -69,7 +102,7 @@ int main(void) {
         for (i = 0; i < pipeCount; i++) {
             int argumentCount;
 
-            commands[i] = parseLine(pipeLines[i], ' ', &argumentCount);
+            commands[i] = parseArguments(pipeLines[i], &argumentCount);
         }
         
         if (pipeCount == 1) {
@@ -94,7 +127,7 @@ int main(void) {
                 else if(strcmp(commands[0][0], "jobs") == 0){
                     builtin_jobs();
                 }
-                else if (strcmp(commands[0][0], "pmon") == 0) { // <-- AGREGAR ESTE BLOQUE
+                else if (strcmp(commands[0][0], "pmon") == 0) {
                     builtin_pmon(commands[0]);
                 }
                 else {
